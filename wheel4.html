@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spinning Wheel Overlay</title>
+    <style>
+        /* Basic styles for the overlay */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            /* Transparent background for overlay use in OBS/streaming software */
+            background-color: transparent;
+            font-family: 'Arial', sans-serif;
+        }
+
+        /* Container to center the wheel and pointer */
+        .wheel-container {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+
+        /* The canvas where the wheel is drawn */
+        #wheelCanvas {
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+
+        /* Add a subtle press effect on click */
+        #wheelCanvas:active {
+            transform: scale(0.98);
+        }
+
+        /* The pointer that indicates the winning segment */
+        .pointer {
+            width: 0;
+            height: 0;
+            /* Creates a triangle shape */
+            border-left: 30px solid transparent;
+            border-right: 30px solid transparent;
+            border-top: 60px solid #ffde03; /* Bright yellow color */
+            position: absolute;
+            top: -50px; /* Position it just above the wheel's center */
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            /* Add a nice border and shadow to make it pop */
+            filter: drop-shadow(0 -5px 5px rgba(0,0,0,0.3));
+        }
+        
+        /* A decorative center pin for the wheel */
+        .center-pin {
+            width: 50px;
+            height: 50px;
+            background: #444;
+            border: 5px solid #ccc;
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 11;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="wheel-container">
+        <div class="pointer"></div>
+        <canvas id="wheelCanvas" width="800" height="800"></canvas>
+        <div class="center-pin"></div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('wheelCanvas');
+            const ctx = canvas.getContext('2d');
+
+            // --- Configuration ---
+            const segments = 13; // Updated to 13 segments
+            const colors = [
+                '#e6194B', '#3cb44b', '#ffe119', '#4363d8', '#f58231', 
+                '#911eb4', '#42d4f4', '#f032e6', '#bfef45', '#fabed4', 
+                '#469990', '#dcbeff', '#9A6324'
+            ];
+            // Text labels for each segment
+            const labels = [
+                "Must disclose it’s a Trade-Up Challenge",
+                "Can only speak Japanese",
+                "Must Trade without speaking",
+                "Must Trade using song lyrics only",
+                "Trade Slave – coach somebody to Trade",
+                "Donate current Card Value to Charity",
+                "Next Card must be Japanese",
+                "Next Card must be English",
+                "Next Card must be a Pikachu",
+                "Next Card must be Fairy type",
+                "Next Card must be a Promo",
+                "Next Card must be a Slab",
+                "Must accept First Offer"
+            ];
+            const friction = 0.995; // Determines how fast the wheel slows down
+            const minSpinVelocity = 0.002; // When velocity is below this, the wheel stops
+
+            // --- State Variables ---
+            let currentRotation = 0;
+            let spinVelocity = 0;
+            let isSpinning = false;
+            let winningSegmentIndex = null; // To store the winner
+
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = canvas.width / 2 - 10; // Leave some padding
+            const segmentAngle = (2 * Math.PI) / segments;
+
+            /**
+             * Helper function to draw wrapped text.
+             * @param {CanvasRenderingContext2D} context - The canvas context.
+             * @param {string} text - The text to wrap.
+             * @param {number} x - The x coordinate.
+             * @param {number} y - The y coordinate.
+             * @param {number} maxWidth - The maximum width of a line.
+             * @param {number} lineHeight - The height of a line.
+             */
+            function drawWrappedText(context, text, x, y, maxWidth, lineHeight) {
+                const words = text.split(' ');
+                let line = '';
+                const lines = [];
+
+                for (let n = 0; n < words.length; n++) {
+                    const testLine = line + words[n] + ' ';
+                    const metrics = context.measureText(testLine);
+                    const testWidth = metrics.width;
+                    if (testWidth > maxWidth && n > 0) {
+                        lines.push(line);
+                        line = words[n] + ' ';
+                    } else {
+                        line = testLine;
+                    }
+                }
+                lines.push(line);
+
+                // Adjust starting Y to vertically center the text block
+                const startY = y - (lines.length - 1) * lineHeight / 2;
+
+                for (let k = 0; k < lines.length; k++) {
+                    const currentY = startY + (k * lineHeight);
+                    // Draw outline and then fill
+                    context.strokeText(lines[k].trim(), x, currentY);
+                    context.fillText(lines[k].trim(), x, currentY);
+                }
+            }
+
+            /**
+             * Draws the entire wheel by drawing in layers to ensure correct stacking.
+             */
+            function drawWheel() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.save();
+                ctx.translate(centerX, centerY);
+                ctx.rotate(currentRotation);
+                ctx.translate(-centerX, -centerY);
+
+                // --- Layer 1: Draw all segment color fills ---
+                for (let i = 0; i < segments; i++) {
+                    const startAngle = i * segmentAngle;
+                    const endAngle = startAngle + segmentAngle;
+                    ctx.beginPath();
+                    ctx.moveTo(centerX, centerY);
+                    ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+                    ctx.closePath();
+                    ctx.fillStyle = colors[i % colors.length];
+                    ctx.fill();
+                }
+
+                // --- Layer 2: Draw all segment borders (black outline then white inset) ---
+                // Black outline
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 6;
+                for (let i = 0; i < segments; i++) {
+                    const startAngle = i * segmentAngle;
+                    const endAngle = startAngle + segmentAngle;
+                    ctx.beginPath();
+                    ctx.moveTo(centerX, centerY);
+                    ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+                    ctx.closePath();
+                    ctx.stroke();
+                }
+                // White inset border
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 3;
+                 for (let i = 0; i < segments; i++) {
+                    const startAngle = i * segmentAngle;
+                    const endAngle = startAngle + segmentAngle;
+                    ctx.beginPath();
+                    ctx.moveTo(centerX, centerY);
+                    ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+                    ctx.closePath();
+                    ctx.stroke();
+                }
+
+                // --- Layer 3: Draw Text Labels with black outline ---
+                ctx.textAlign = "right";
+                ctx.textBaseline = "middle";
+                const maxTextWidth = radius * 0.75; // Max width for text with padding
+
+                for (let i = 0; i < segments; i++) {
+                    const label = labels[i];
+                    const textAngle = i * segmentAngle + segmentAngle / 2;
+                    ctx.save();
+                    ctx.translate(centerX, centerY);
+                    ctx.rotate(textAngle);
+
+                    // Auto-adjust font size to fit
+                    let fontSize = 20; 
+                    ctx.font = `bold ${fontSize}px Arial`;
+                    while (ctx.measureText(label).width > maxTextWidth && fontSize > 8) {
+                        // This check is a fallback for single very long words
+                        fontSize--; 
+                        ctx.font = `bold ${fontSize}px Arial`;
+                    }
+                    
+                    // --- Text Drawing ---
+                    ctx.lineJoin = 'round'; // Fixes "horns" on letters
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 4;
+                    ctx.fillStyle = "#fff";
+                    
+                    drawWrappedText(ctx, label, radius - 15, 0, maxTextWidth, fontSize);
+                    
+                    ctx.restore();
+                }
+                
+                // --- Layer 4: Draw the winner highlight on top ---
+                if (!isSpinning && winningSegmentIndex !== null) {
+                    const startAngle = winningSegmentIndex * segmentAngle;
+                    const endAngle = startAngle + segmentAngle;
+                    ctx.beginPath();
+                    ctx.moveTo(centerX, centerY);
+                    ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+                    ctx.closePath();
+                    ctx.strokeStyle = '#FFD700'; // Gold color for highlight
+                    ctx.lineWidth = 12; // A thick, flat border
+                    ctx.stroke();
+                }
+
+                ctx.restore();
+            }
+
+            /**
+             * The main animation loop, called for every frame.
+             */
+            function animate() {
+                if (isSpinning) {
+                    spinVelocity *= friction;
+                    currentRotation += spinVelocity;
+                    if (Math.abs(spinVelocity) < minSpinVelocity) {
+                        isSpinning = false;
+                        spinVelocity = 0;
+                        winningSegmentIndex = getWinningSegment();
+                    }
+                }
+                drawWheel();
+                requestAnimationFrame(animate);
+            }
+
+            /**
+             * Calculates which segment is currently under the pointer.
+             * @returns {number} The index of the winning segment.
+             */
+            function getWinningSegment() {
+                const totalAngle = (2 * Math.PI);
+                const normalizedRotation = (currentRotation % totalAngle + totalAngle) % totalAngle;
+                const pointerAngle = 1.5 * Math.PI;
+                const finalAngle = (totalAngle - normalizedRotation + pointerAngle) % totalAngle;
+                return Math.floor(finalAngle / segmentAngle);
+            }
+
+            /**
+             * Handles the click event on the canvas to start the spin.
+             */
+            function startSpin() {
+                if (isSpinning) {
+                    return;
+                }
+                winningSegmentIndex = null; 
+                isSpinning = true;
+                spinVelocity = Math.random() * 0.4 + 0.4; 
+            }
+
+            canvas.addEventListener('click', startSpin);
+            animate();
+        });
+    </script>
+</body>
+</html>
